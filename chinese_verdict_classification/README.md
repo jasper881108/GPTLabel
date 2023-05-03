@@ -11,18 +11,18 @@
 2. gpt-4
 
 ## Prompt design ( 3 stage )
-1. Summary
+1. Summary by chunk ( article is too long, need to be sliced )
 ```
 system_info1 = """提取身體受傷部位,原告年齡,肇責比例資訊"""
 prompt_stage1 = """幫我提取出法院同意的身體受傷部位,原告年齡,肇責比例得詳細資訊\n\n""" 
 ```
 
-2. Eliminate noise
+1.5. Eliminate noise ( Optional, if stage 1 chunk is 1, there is no need for this prompt )
 ```
 system_info1_ = """去掉沒有資訊含量的部分""" 
 prompt_stage1_ = """幫我去除沒有資訊含量的語句,留下身體受傷部位,原告年齡,肇責比例\n\n"""
 ```
-3. Convert to specific format
+2. Convert to specific format
 ```
 system_info2 = """照格式產生結構化資料，回答越精要越好"""
 prompt_stage2 = """依照下文內容將身體受傷部位,原告年齡(沒有任何資訊則是為未提及原告年齡),肇責比例(如果有提及則原告+被告=100%)資訊填入至下面格式\n\n
