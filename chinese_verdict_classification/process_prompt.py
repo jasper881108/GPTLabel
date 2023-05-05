@@ -8,8 +8,8 @@ from tqdm import tqdm
 
 system_info1 = """提取身體受傷部位,原告年齡,肇責比例資訊"""
 prompt_stage1 = """幫我提取出法院同意的身體受傷部位,原告年齡,肇責比例得詳細資訊\n\n""" 
-system_info1_ = """去掉沒有資訊含量的部分""" 
-prompt_stage1_ = """幫我去除沒有資訊含量的語句,留下身體受傷部位,原告年齡,肇責比例\n\n"""
+system_info_clean = """去掉沒有資訊含量的部分""" 
+prompt_stage_clean = """幫我去除沒有資訊含量的語句,留下身體受傷部位,原告年齡,肇責比例\n\n"""
 system_info2 = """照格式產生結構化資料，回答越精要越好"""
 prompt_stage2 = """依照下文內容將身體受傷部位,原告年齡(沒有任何資訊則是為未提及原告年齡),肇責比例(如果有提及則原告+被告=100%)資訊填入至下面格式\n\n
 [
@@ -110,8 +110,6 @@ default_label = dict({
 "未提及":False,
 }})
 
-cost = {"gpt-3.5-turbo":0.06,"gpt-4":0.6 }
-
 def unwrap_keys(obj, prefix='', keys=None):
     if keys is None:
         keys = []
@@ -132,6 +130,28 @@ def messeage_prepare(text, prompt, system_info):
         ]
     return message
 
+def openai_chat_inference_and_calculate(
+        model, 
+        text,
+        prompt_stage, 
+        system_info,
+        tokens_info,
+        temperature=0.0
+        ):
+
+    response = openai.ChatCompletion.create(
+        model=model,
+        messages=messeage_prepare(text, prompt=prompt_stage, system_info=system_info),
+        temperature=temperature,
+        )
+
+    completions = response["choices"][0]["message"]["content"]
+    tokens_info["prompt_tokens"] += response["usage"]["prompt_tokens"]
+    tokens_info["completion_tokens"] += response["usage"]["completion_tokens"]
+    tokens_info["total_tokens"] += response["usage"]["total_tokens"]
+        
+    return completions, tokens_info
+
 def main(args):     
     f = open("openai_api.txt", "r")
     api_key = f.readline()[:-1]
@@ -146,110 +166,119 @@ def main(args):
     require_keys = unwrap_keys(default_label)
     
     #### Pre: Initial status, if past info exist, read and keep process
-    start_idx, prompt_tokens, completion_tokens, total_tokens = 0, 0, 0, 0
-    input_text, n_chunk, completions_stage1, completions_stage2 = [],[],[],[]
+    start_idx = 0
+    dataframe_info ={
+        "input_text":[],
+        "n_chunk":[],
+        "stage1_response":[],
+        "response":[],
+    }
+    tokens_info = {
+        "prompt_tokens":0,
+        "completion_tokens":0,
+        "total_tokens":0,
+    }
+    cost = {
+        "gpt-3.5-turbo":0.06,
+        "gpt-4":0.6 
+    }
+    cost_per_1k_token = cost[args.model]
+
     
     if os.path.exists(args.path_to_file):
         df = pd.read_csv(args.path_to_file)
         start_idx = len(df)
-        input_text, n_chunk = df.input_text.tolist(), df.n_chunk.tolist()
-        completions_stage1, completions_stage2 = df.stage1_response.tolist(), df.response.tolist()
+        dataframe_info = df.to_dict('list')
+        
 
     epoch_bar = tqdm(range(start_idx, args.batch_size), desc="Calling OpenAI API...")
     for idx in range(start_idx, args.batch_size):
 
         #### Stage 1: Summarizing chunk
-
         completions_stage1_c = []
         split_text = split_list_of_text[idx]
         epoch_bar_chunk = tqdm(range(len(split_text)), desc="Summary chunk")
         for text in split_text:
-            response = openai.ChatCompletion.create(
-                model=model,
-                messages=messeage_prepare(text, prompt=prompt_stage1, system_info=system_info1),
-                temperature=args.tem_for_nlg,
+            completions, tokens_info = openai_chat_inference_and_calculate(
+                model, 
+                text, 
+                prompt_stage1,
+                system_info1,
+                tokens_info,
+                args.tem_for_nlg
                 )
-                    
-            completions_stage1_c.append(response["choices"][0]["message"]["content"])
-            prompt_tokens += response["usage"]["prompt_tokens"]
-            completion_tokens += response["usage"]["completion_tokens"]
-            total_tokens += response["usage"]["total_tokens"]
-            epoch_bar_chunk.update()
+            
+            completions_stage1_c.append(completions)
             epoch_bar_chunk.set_postfix({
-                      "p_token": prompt_tokens,
-                      "c_token": completion_tokens,
-                      "total_token": total_tokens,
+                      "p_token": tokens_info["prompt_tokens"],
+                      "c_token": tokens_info["completion_tokens"],
+                      "total_token": tokens_info["total_tokens"],
             })
+            epoch_bar_chunk.update()
+
         epoch_bar_chunk.close()
-        completions_stage1_ = "".join(completions_stage1_c).replace("\n", "")
+        completions_stage1_text = "".join(completions_stage1_c).replace("\n", "")
 
         if len(split_text) > 1:
-            response = openai.ChatCompletion.create(
-                model=model,
-                messages=messeage_prepare(completions_stage1_, prompt=prompt_stage1_, system_info=system_info1_),
-                temperature=args.tem_for_nlg,
+            completions_stage1_text, tokens_info = openai_chat_inference_and_calculate(
+                model, 
+                completions_stage1_text, 
+                prompt_stage_clean,
+                system_info_clean,
+                tokens_info,
+                args.tem_for_nlg
                 )
-                        
-            completions_stage1_ = response["choices"][0]["message"]["content"].replace("\n", "")
-            prompt_tokens += response["usage"]["prompt_tokens"]
-            completion_tokens += response["usage"]["completion_tokens"]
-            total_tokens += response["usage"]["total_tokens"]
+            completions_stage1_text = completions_stage1_text.replace("\n", "")
         
         #### Stage 2: Generating specific format
-        print(f"Current summary : {completions_stage1_}")
+        print(f"Current summary : {completions_stage1_text}")
         retry_step = 0
-        schema_check = True
+        schema_check_fail = True
         epoch_bar_retry = tqdm(range(args.retry_size), desc="Retry if label isn't valid") 
-        while retry_step <= args.retry_size and schema_check:  
-            response = openai.ChatCompletion.create(
-                    model=model,
-                    messages=messeage_prepare(completions_stage1_, prompt=prompt_stage2, system_info=system_info2),
-                    temperature=args.tem_for_nlu + 0.1*retry_step,
+
+        while retry_step <= args.retry_size and schema_check_fail:
+            label, tokens_info = openai_chat_inference_and_calculate(
+                model, 
+                completions_stage1_text, 
+                prompt_stage2,
+                system_info2,
+                tokens_info,
+                args.tem_for_nlu + 0.1*retry_step
                 )
-                
-            prompt_tokens += response["usage"]["prompt_tokens"]
-            completion_tokens += response["usage"]["completion_tokens"]
-            total_tokens += response["usage"]["total_tokens"]
-            label = response["choices"][0]["message"]["content"]
 
             try:
                 text = re.sub("\n|%", "", label)
                 st, ed = re.search("\[", text).end(), re.search("\]", text).start()
                 clean_label = eval(text[st:ed])
-                schema_check = require_keys != unwrap_keys(clean_label)
+                schema_check_fail = require_keys != unwrap_keys(clean_label)
             except:
                 pass
             
             epoch_bar_retry.update()
             retry_step += 1
 
-        if schema_check == True:
+        if schema_check_fail == True:
             clean_label = "Error"
            
         epoch_bar_retry.close()
 
         
-        input_text.append("".join(split_text))
-        n_chunk.append(len(split_text))
-        completions_stage1.append(completions_stage1_)
-        completions_stage2.append(clean_label)
+        dataframe_info["input_text"].append("".join(split_text))
+        dataframe_info["n_chunk"].append(len(split_text))
+        dataframe_info["stage1_response"].append(completions_stage1_text)
+        dataframe_info["response"].append(clean_label)
         epoch_bar.update()
         epoch_bar.set_postfix({
-                         "p_token": prompt_tokens,
-                         "c_token": completion_tokens,
-                         "total_token": total_tokens,
-                         "n_chunk":n_chunk[idx],
-                         "GPT Cost NTD":total_tokens//1000*cost[args.model],
+                        "n_chunk":dataframe_info["n_chunk"][idx],
+                        "p_token": tokens_info["prompt_tokens"],
+                        "c_token": tokens_info["completion_tokens"],
+                        "total_token": tokens_info["total_tokens"],
+                        "GPT Cost NTD":tokens_info["total_tokens"]//1000*cost_per_1k_token,
         })
 
         #### save file after n prompt
         if (idx+1) % args.save_step == 0:
-            df = pd.DataFrame({
-                "input_text":input_text,
-                "n_chunk":n_chunk,
-                "stage1_response":completions_stage1,
-                "response":completions_stage2,
-            })
+            df = pd.DataFrame(dataframe_info)
             df.to_csv(args.path_to_file, header=True, index=False)
 
     epoch_bar.close()
@@ -260,10 +289,10 @@ def main(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset', type=str, default='30_shot_text.txt')
-    parser.add_argument('--model', type=str, default='gpt-4')
+    parser.add_argument('--model', type=str, default='gpt-3.5-turbo')
     parser.add_argument('--batch_size', type=int, default=30)
     parser.add_argument('--retry_size', type=int, default=5)
-    parser.add_argument('--word_step', type=int, default=5000)
+    parser.add_argument('--word_step', type=int, default=2000)
     parser.add_argument('--save_step', type=int, default=1)
     parser.add_argument('--tem_for_nlg', type=float, default=0.3)
     parser.add_argument('--tem_for_nlu', type=float, default=0.0)
