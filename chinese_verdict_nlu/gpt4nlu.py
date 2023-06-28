@@ -364,7 +364,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset', type=str, default='data/chinese_verdict_and_label_108.jsonl')
     parser.add_argument('--summary_model', type=str, default='gpt-3.5-turbo-0301')
-    parser.add_argument('--format_model', type=str, default='gpt-3.5-turbo-0301')
+    parser.add_argument('--format_model', type=str, default='gpt-4')
     parser.add_argument('--list_nlp_task', type=str, nargs='*', default=['cls', 'uie'])
     parser.add_argument('--batch_size', type=int, default=108)
     parser.add_argument('--retry_size', type=int, default=3)
