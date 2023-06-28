@@ -1,4 +1,4 @@
-# Chinese Verdict Classification
+# Chinese Verdict NLU
 
 <br>
 
